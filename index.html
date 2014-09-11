@@ -1,0 +1,482 @@
+<html>
+ <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>AlcoPlot</title>
+    <!--[if lte IE 8]><script language="javascript" type="text/javascript" src="../excanvas.min.js"></script><![endif]-->
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.6.2/jquery.min.js" type="text/javascript"></script>
+    <script src="http://ajax.googleapis.com/ajax/libs/jqueryui/1.8.16/jquery-ui.min.js" type="text/javascript"></script>
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.js"></script>
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.tracker.js"></script>    
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.threshold.js"></script>   
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.crosshair.js"></script>
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.events.js"></script>   
+    <script language="javascript" type="text/javascript" src="flot/jquery.flot.resize.js"></script>
+    <link type="text/css" href="smoothness/jquery-ui-1.8.16.custom.css" rel="stylesheet" />	
+    <link type="text/css" href="flot/jquery.flot.events.css" rel="stylesheet" />	
+	<style>
+		#person-form, #drink-form { font-size: 62.5%; }
+		#person-form input.text, #drink-form input.text { padding: .4em; border: 0; width: 6em}
+		fieldset { padding:0; border:0; }
+		h1 { font-size: 1.2em; margin: .6em 0; }
+		.ui-dialog .ui-state-error { padding: .3em; }
+		.validateTips { border: 1px solid transparent; padding: 0.3em; }
+    .ui-dialog .ui-dialog-buttonpane {margin: 0; padding: 0;}
+    .ui-dialog .ui-dialog-buttonpane .ui-dialog-buttonset { text-align: center; float: none; }
+    .ui-dialog .ui-dialog-buttonpane button { margin: 0; margin-top: 0.2em }
+    .ui-dialog label.ui-state-active span { font-weight: bold; }
+
+    #placeholder img.event {cursor: pointer;}
+    #placeholder {min-height: 350px;}
+    body {-moz-transform-origin: 0 0}
+	</style>
+<script>
+  function Drink(vol, alco, time) {
+    this.volume = vol;
+    this.alcohol = alco;
+    this.time = time;
+  }
+
+  var person = null;
+  var data = new Array();
+  var drinks = new Array();
+  
+  var TZoffset = new Date().getTimezoneOffset() * -60 * 1000;
+
+  var D = 0.0;
+  var tunit = 60*60;
+  var KeMax = (10.2) / 3600.0;
+  var a =  0.00167;
+  var Vm = 0.202 / 3600.0;
+  var Km = 0.0818;
+  var ka = 25.1 / 3600.0;
+  var Bm = 0.0;
+  var ST = 0;
+  var Bmt = 0.0;
+  var dt = 30.0;
+
+  function Person(age, gender, weight, height) {
+    this.age = age;       // years
+    this.gender = gender; // 0 - female, 1 - male
+    this.weight = weight; // kg
+    this.height = height; // cm
+    this.diabetes = 0;
+
+    // Chertow TBW formula
+    // Beware, here be dragons!
+    this.tbw = function() {
+      return -(0.07493713*this.age)-(1.01767792*this.gender)+(0.12703384*this.height)-(0.04012056*this.weight)+(0.57894981*this.diabetes)-(0.00067247*Math.pow(this.weight, 2))-(0.03486146*this.age*this.gender)+(0.11262857*this.gender*this.weight)+(0.00104135*this.age*this.weight)+(0.00186104*this.height*this.weight);
+    }
+  }
+
+  function getMeta(person) {
+    return (person.weight*0.0001)/(60*60);
+  }
+
+  function getF(d) {
+    var result = 1.0;
+    return result; // ????????????????
+    if(d<22.4) {
+      if(d<11.2) {
+        result = 0.785;
+      } else {
+        result = (22.4-d)/(11.2)*0.785 + (d-11.2)/11.2*0.960;
+      }
+    } else {
+      result = 1.0;
+    }
+    return result;
+  }
+
+  function calculate() {
+    var V=this.person.tbw();
+    var I=0.0;
+    var B=0.0;
+    var DI=0;
+    var i=0;
+
+    this.data = new Array();
+    
+    this.ST = Math.round(Date.now()/1000);
+    for(var j=0; j<drinks.length; j++) {
+        this.ST = Math.min(this.ST, drinks[j].time);
+    }
+    
+    while (drinks.length) {
+      var Id=0.0;
+      var c=0;
+      var keSum=0.0;
+      var DeSum=0.0;
+
+      for(var j=0; j<drinks.length; j++) {
+        var drink = drinks[j];
+        if (i*this.dt + this.ST >= drink.time) {
+          c += 1;
+          if(drink.alcohol>0.0001){
+            var t = i*this.dt + this.ST - drink.time;
+            var D = drink.volume * drink.alcohol * 0.789 * 1000;
+            DeSum += D;
+            var D2 = Math.min(D*D, 2/this.a);
+            var ke = this.KeMax / (1 + this.a*(D2));
+            keSum +=  ke * Math.pow(Math.E, -(ke*t))
+          }
+        }
+      }
+
+      for(var j=0; j<drinks.length; j++) {
+        var drink = drinks[j];
+        if ((i*this.dt + this.ST >= drink.time) && (drink.alcohol > 0.0001)) {
+          var t = i*this.dt + this.ST - drink.time;
+          var D = drink.volume * drink.alcohol * 0.789 * 1000;
+          var D2 = Math.min(D*D, 2/this.a);
+
+          var ke = self.KeMax / (1+self.a*(D2));
+          var kem = ke * ((ke * Math.pow(Math.E,-(ke*t))) / keSum);
+          Id += (kem) * ((this.getF(D)*D)/V)*Math.pow(Math.E, -(kem*t));
+        }
+      }
+
+      Id -= (this.ka * I);
+      var Bd = this.ka * I - this.Vm*B / (this.Km + B);
+      I += Id * this.dt;
+      B += Bd * this.dt;
+      if(B>this.Bm) {
+        this.Bmt = i;
+        this.Bm = B;
+      }
+
+      //this.data[DI] = B/1000.0 * 0.943;
+      this.data[DI] = [(i*this.dt+this.ST)*1000 + TZoffset, B];
+
+      if((B<0.005) && (i>600.0/this.dt) && (c==drinks.length) && ((i*this.dt+this.ST)-drinks[c-1].time>300.0)) {
+        break;
+      }
+      DI+=1;
+      i+=1;
+    }
+    return this.data;
+  }
+
+
+  function formatTick(val, axis) {
+    var d = new Date(val);
+    return (d.getUTCHours() == 0) && (d.getUTCMinutes() == 0) ? d.toString("mmm d") : d.toString("HH:MM");
+  }
+
+  function generateMarks(axes) {
+    var markings = [];
+
+    var x = Date.now()+TZoffset;
+    //markings.push({ color: 'orange', lineWidth: 2, xaxis: { from: x, to: x }});
+
+    markings.push({ color: 'red', lineWidth: 2, yaxis: { from: 0.5, to: 0.5}});
+
+    for (var x = Math.floor(axes.xaxis.min/86400000)*86400000; x <= axes.xaxis.max; x += 86400000) {
+      markings.push({ color: 'black', lineWidth: 2, xaxis: { from: x, to: x } });
+    }
+    return markings;
+  }
+
+  var $plot = null;
+  function doPlot() {
+    clearTimeout(this.plotTimer);
+    $("#placeholder").html('');
+
+    if ((drinks.length == 0) || (data.length == 0)) {
+      $("#placeholder").hide();
+      return;
+    } else {
+      $("#placeholder").show();
+    }
+
+    var drinksdata = new Array();
+    for(var j=0; j<drinks.length; j++) {
+      var drink = drinks[j];
+      var time = drink.time * 1000 + TZoffset;
+      drinksdata[j] = {
+        min: time,
+        max: time,
+        eventType: "drink",
+        title: "Dzēriens",
+        description: drink.volume + "l of " + drink.alcohol*100 + "% at " + $.plot.formatDate(new Date(time), "%H:%M"),
+        drinkNum: j,
+      }
+    }
+
+    $plot = $.plot($("#placeholder"), [{
+          data: data,
+          color: "red",
+          threshold: { below: 0.5, color: "green" },          
+        }], {
+          xaxis: { mode: "time", autoscaleMargin: 0.01, minTickSize: [30, "minute"]},
+          grid: { hoverable: true, clickable: true, autoHighlight: false, markings: generateMarks},
+          crosshair: { mode: "x" },
+          tooltip: true,
+          events: {
+              data: drinksdata,
+          }
+        });
+        
+    $plot.hooks.drawOverlay.push(function (plot, ctx) {
+          var plotOffset = plot.getPlotOffset();
+          var time = Date.now()+TZoffset;
+
+          var pos = plot.p2c({x: time});
+
+          ctx.save();
+          ctx.translate(plotOffset.left, plotOffset.top);
+
+          ctx.strokeStyle = "rgba(255,165,0,0.8)";
+          ctx.lineWidth = 2;
+          ctx.lineJoin = "round";
+
+          ctx.beginPath();
+          ctx.moveTo(pos.left, 0);
+          ctx.lineTo(pos.left, plot.height());
+          ctx.stroke();
+          ctx.restore();
+    });
+
+    function updateNowLine() {
+            $plot.triggerRedrawOverlay();
+            this.plotTimer = setTimeout(updateNowLine, 1000);
+    }
+
+    updateNowLine();
+  }
+
+  
+  $(function () {
+    var age = $( "#age" ),
+			  gender = $( "#gender" ),
+			  weight = $( "#weight" ),
+			  height = $( "#height" ),
+			  volume = $( "#volume" ),
+			  percent = $( "#percent" ),
+			  timestamp = $( "#timestamp" ),
+			  time = $( "#time" ),
+			  allPersonFields = $( [] ).add( age ).add( gender ).add( weight ).add( height ),
+			  tips = $( ".validateTips" );
+
+    $( "#gender-radio" ).buttonset();
+
+    $( "#age-slider" ).slider({
+			value:22,
+			min: 18,
+			max: 100,
+			step: 1,
+			slide: function( event, ui ) {
+				age.val( ui.value + " gadi" );
+			}
+		});
+		age.val( $( "#age-slider" ).slider( "value" ) + " gadi" );
+
+    $( "#weight-slider" ).slider({
+			value:92,
+			min: 40,
+			max: 150,
+			step: 1,
+			slide: function( event, ui ) {
+				weight.val( ui.value + " kg" );
+			}
+		});
+    weight.val( $( "#weight-slider" ).slider( "value" ) + " kg" );
+
+    $( "#height-slider" ).slider({
+			value:183,
+			min: 140,
+			max: 220,
+			step: 1,
+			slide: function( event, ui ) {
+				height.val( ui.value + " cm" );
+			}
+		});
+    height.val( $( "#height-slider" ).slider( "value" ) + " cm" );
+
+    $( "#volume-slider" ).slider({
+			value:0.5,
+			min: 0.010,
+			max: 2.00,
+			step: 0.01,
+			slide: function( event, ui ) {
+				volume.val( ui.value + " l" );
+			}
+		});
+    volume.val( $( "#volume-slider" ).slider( "value" ) + " l" );
+
+    $( "#percent-slider" ).slider({
+			value: 340,
+			min: 1,
+			max: 1000,
+			step: 1,
+			slide: function( event, ui ) {
+				percent.val( (0.9133 * Math.exp(0.004517 * ui.value)).toFixed(1) + " %" );
+			}
+		});
+    percent.val( (0.9133 * Math.exp(0.004517 * $("#percent-slider" ).slider( "value" ))).toFixed(1) + " %" );
+
+    var tmpNow = Math.round(Date.now() / 300000) * 300000;
+    $( "#time-slider" ).slider({
+			value: tmpNow,
+			min: tmpNow - 43200000,
+			max: tmpNow + 43200000,
+			step: 300000,
+			slide: function( event, ui ) {
+				timestamp.val( ui.value );
+				time.val( $.plot.formatDate(new Date(ui.value + TZoffset), "%H:%M") );
+			}
+		});
+
+    $( "#person-form" ).dialog({
+      autoOpen: true,
+      height: 250,
+      width: 180,
+      modal: true,
+      buttons: {
+        "Davai": function() {
+          var bValid = true;
+          allPersonFields.removeClass( "ui-state-error" );
+
+          if ( bValid ) {
+            person = new Person(parseInt(age.val()), 1, parseInt(weight.val()), parseInt(height.val()));
+
+            calculate();
+
+            doPlot();
+
+            $( this ).dialog( "close" );
+          }
+        }
+      },
+      close: function() {
+        allPersonFields.val( "" ).removeClass( "ui-state-error" );
+      }
+    });
+
+    $( "#drink-form" ).dialog({
+      autoOpen: false,
+      height: 250,
+      width: 370,
+      modal: true,
+      buttons: {
+        "Davai": function() {
+          drinks.push(new Drink(parseFloat(volume.val()), parseFloat(percent.val())/100.0, Math.round(timestamp.val()/1000)));
+          drinks.sort(function (a, b) {return a.time - b.time});
+
+          $( this ).dialog( "close" );
+
+          calculate();
+
+          doPlot();
+
+        }
+      },
+      close: function() {
+        //allFields.val( "" ).removeClass( "ui-state-error" );
+      }
+    });
+
+    $("#placeholder img.event").live('click', function() {
+      if (!confirm("Nodzēst?")) return;
+
+      var i = $(this).data('event').drinkNum;
+
+      drinks = drinks.slice(0, i).concat(drinks.slice(i+1));
+      calculate();
+
+      doPlot();
+    });
+
+    $("#placeholder").bind("plotclick", function (event, pos, item) {
+      tmpNow = Math.round((pos.x - TZoffset) / 300000) * 300000;
+
+      $( "#time-slider" ).slider("value", tmpNow);
+      timestamp.val( tmpNow);
+      time.val( $.plot.formatDate(new Date(tmpNow + TZoffset), "%H:%M") );
+      
+      $( "#drink-form" ).dialog('open');
+    });
+
+    $('#add-drink').button().click(function (){
+      tmpNow = Math.round(Date.now() / 300000) * 300000;
+
+      $( "#time-slider" ).slider("value", tmpNow);
+      timestamp.val( tmpNow );
+      time.val( $.plot.formatDate(new Date(tmpNow + TZoffset), "%H:%M") );
+
+      $( "#drink-form" ).dialog('open');
+    });
+
+    $('#redraw').button().click(function (){
+          calculate();
+
+          doPlot();
+    });
+
+    var currZoom = $("body").css("zoom");
+    if(!currZoom || (currZoom == 'normal')) currZoom=1; // For IE
+
+    $("#zoomIn").button().click(function(){
+        currZoom*=1.2;
+        $("body").css("zoom",currZoom).css("-moz-transform", "scale("+currZoom+")");
+
+    });
+    $("#zoomOut").button().click(function(){
+        currZoom*=.8;
+        $("body").css("zoom",currZoom).css("-moz-transform", "scale("+currZoom+")");
+    }); 
+
+    //drinks.push(new Drink(0.0001, 0.0, Math.round(Date.now()/1000)));
+//    drinks.push(new Drink(0.5, 0.05, Math.round(Date.now()/1000 - 1800)));
+//    drinks.push(new Drink(0.1, 0.40, Math.round(Date.now()/1000 - 3600)));
+
+    //calculate(new Person(parseInt(age.val()), 1, parseInt(weight.val()), parseInt(height.val())));
+    
+  });
+</script>
+</head>
+<body>
+  <a id="add-drink">+1 dzēriens</a>
+  <a id="redraw">Pārzīmēt</a>
+  <a id="zoomIn">+</a>
+  <a id="zoomOut">-</a>
+  <div id="placeholder" style="width:90%; height:80%; margin: 1em auto;"></div>
+  <div id="person-form" title="Persona">
+    <form>
+      <fieldset>
+        <label for="age">Vecums:</label>
+        <input type="text" name="age" id="age" class="text ui-widget-content ui-corner-all" />
+        <div id="age-slider"></div>
+        <label for="gender">Dzimums:</label>
+        <div id="gender-radio">
+          <input type="radio" id="gender1" name="gender" value="0" /><label for="gender1">Sieviešu</label>
+      		<input type="radio" id="gender2" name="gender" value="1" checked="checked" /><label for="gender2">Vīriešu</label>
+        </div>
+        <label for="weight">Svars:</label>
+        <input type="text" name="weight" id="weight" class="text ui-widget-content ui-corner-all" />
+        <div id="weight-slider"></div>
+        <label for="height">Garums:</label><input type="text" name="height" id="height" class="text ui-widget-content ui-corner-all" />
+        <div id="height-slider"></div>
+      </fieldset>
+    </form>
+  </div>
+
+  <div id="drink-form" title="Dzēriens">
+    <form>
+      <fieldset>
+        <label for="volume">Tilpums:</label>
+        <input type="text" name="volume" id="volume" class="text ui-widget-content ui-corner-all" />
+        <div id="volume-slider"></div>
+
+        <label for="percent">Alkohols:</label>
+        <input type="text" name="percent" id="percent" class="text ui-widget-content ui-corner-all" />
+        <div id="percent-slider"></div>
+
+        <label for="time">Laiks:</label>
+        <input type="hidden" name="timestamp" id="timestamp" />
+        <input type="text" name="time" id="time" class="text ui-widget-content ui-corner-all" />
+        <div id="time-slider"></div>
+      </fieldset>
+    </form>
+  </div>
+</body>
+</html>
